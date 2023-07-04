@@ -1,12 +1,9 @@
 from trafficEnv import TrafficEnv
+import resources.config as conf
 
-base_dir = "D:/SUMOS/SimpleJunction/"
-sumo_cfg = base_dir + "simpleJunction.sumocfg"
-trips_file = base_dir + "trips.trips.xml"
-additional_files = base_dir + "simpleJunction.add.xml"
 sumo_cmd = "sumo"
 
-cfg = [sumo_cmd, "-c", sumo_cfg, "-r", trips_file]
+cfg = [sumo_cmd, "-c", conf.sumo_cfg, "-r", conf.trips_file]
 
 env = TrafficEnv(cfg, "J25", 3600)
 
@@ -20,4 +17,4 @@ for episode in range(eps):
         random_action = env.action_space.sample()
         obs, reward, done, info = env.step(random_action)
         d = done
-        # print(reward)
+        print(reward)

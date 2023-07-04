@@ -1,7 +1,11 @@
 import subprocess
 import time
 
+import matplotlib.pyplot as plt
+import openpyxl
 import traci
+
+from environment.resources import config
 
 
 def generate_new_random_traffic(count):
@@ -25,11 +29,7 @@ def smooth(scalars: [], weight: float) -> []:  # Weight between 0 and 1
     return smoothed
 
 
-base_dir = "D:/SUMOS/SimpleJunction/"
-sumo_cfg = base_dir + "simpleJunction.sumocfg"
-trips_file = base_dir + "trips.trips.xml"
-additional_files = base_dir + "simpleJunction.add.xml"
-sumo_cmd = "sumo"
+sumo_cmd = "sumo-gui"
 
 # define simulation time steps
 step = 0
@@ -48,7 +48,7 @@ intersection_waiting_times = []
 
 start_time = time.time()
 # generate_new_random_traffic(5000)
-traci.start([sumo_cmd, "-c", sumo_cfg, "-r", trips_file])
+traci.start([sumo_cmd, "-c", config.sumo_cfg, "-r", config.trips_file])
 
 traffic_light_id = "J25"
 incoming_lanes = set()
@@ -134,23 +134,22 @@ def get_one_hot_encoding(red_yellow_green_state):
             encoding[curr_index] = 1
             break
         curr_index += 1
-    print(tls_state, " ", encoding)
-    binary_string = ''.join(str(bit) for bit in encoding)
-    decimal_number = int(binary_string, 2)
-    return decimal_number
+
+    if 1 in encoding:
+        return encoding.index(1) + 1
+    else:
+        return 0
 
 
-edges = {}
-controlled_lanes = set()
+in_lanes = set()
+out_lanes = set()
 lanes = traci.trafficlight.getControlledLinks(traffic_light_id)
 for lane in lanes:
     edge = lane[0][0]
-    controlled_lanes.add(edge)
-    key = edge[:-2]
-    edges[key] = 0
+    in_lanes.add(edge)
+    out_lanes.add(lane[0][1])
 
 program_logic = traci.trafficlight.getAllProgramLogics(traffic_light_id)
-print(program_logic)
 
 # traci.trafficlight.setRedYellowGreenState(traffic_light_id, "GGGGGGGGGGGGGGGG")
 # detector id is e3_number, number in range of [0,7]
@@ -164,46 +163,139 @@ curr_state = None
 
 
 def compute_observation_array():
+    global measuring
+    global green_time_start
     new_state = traci.trafficlight.getRedYellowGreenState(traffic_light_id)
     tls_state = get_one_hot_encoding(new_state)
-    lane_densities = []
-    lane_queues = []
-    for lane in controlled_lanes:
+    lane_densities = [] * 8
+    halting_numbers = [] * 8
+    accumulated_waiting_times = [] * 8
+    for lane in in_lanes:
         lane_densities.append(traci.lane.getLastStepOccupancy(lane))
-        lane_queues.append(traci.lane.getLastStepHaltingNumber(lane))
+        halting_numbers.append(traci.lane.getLastStepHaltingNumber(lane))
+        vehicles = traci.lane.getLastStepVehicleIDs(lane)
+        waiting_time = []
+        for vehicle in vehicles:
+            waiting_time.append(traci.vehicle.getWaitingTime(vehicle))
+        if len(waiting_time) > 0:
+            # stores the biggest waiting time only
+            accumulated_waiting_times.append(max(waiting_time))
+        else:
+            accumulated_waiting_times.append(0)
     obs_array = [tls_state]
     obs_array.extend(lane_densities)
-    obs_array.extend(lane_queues)
+    obs_array.extend(accumulated_waiting_times)
+    obs_array.extend(halting_numbers)
     """One hot encoding for tls state and method for measuring green times in simulation seconds"""
     # print(compute_observation_array())
-
+    global curr_state
+    global min_green_flag
     # if the state has changed
-    # if new_state != curr_state:
-    #     if min_green_flag:
-    #         min_green_flag = False
-    #         measuring = False
-    #         print("Resetting green flag")
-    #         if "G" in new_state:
-    #             min_green_flag = False
-    #             measuring = False
-    #     curr_state = new_state
-    #
-    # if "G" in new_state and not measuring:
-    #     measuring = True
-    #     green_time_start = traci.simulation.getTime()
-    #
-    # if measuring and traci.simulation.getTime() - green_time_start > min_green_time:
-    #     print("Min green time exceeded")
-    #     min_green_flag = True
+    if new_state != curr_state:
+        if min_green_flag:
+            min_green_flag = False
+            measuring = False
+            if "G" in new_state:
+                min_green_flag = False
+                measuring = False
+        curr_state = new_state
+
+    if "G" in new_state and not measuring:
+        measuring = True
+        green_time_start = traci.simulation.getTime()
+
+    if measuring and traci.simulation.getTime() - green_time_start > min_green_time:
+        min_green_flag = True
+    obs_array.append(int(min_green_flag == True))
     return obs_array
 
+
+def get_all_vehicles():
+    veh = []
+    for lane in in_lanes:
+        veh += traci.lane.getLastStepVehicleIDs(lane)
+    for lane in out_lanes:
+        veh += traci.lane.getLastStepVehicleIDs(lane)
+    return veh
+
+
+def get_lane_pressure():
+    """Computes the difference between the number of vehicles leaving and approaching the intersection"""
+    return sum(traci.lane.getLastStepVehicleNumber(l) for l in out_lanes) - sum(
+        traci.lane.getLastStepVehicleNumber(l) for l in in_lanes)
+
+
+def get_average_speed() -> float:
+    """Returns the average speed normalized by the maximum allowed speed of the vehicles in the intersection.
+
+    Obs: If there are no vehicles in the intersection, it returns 1.0.
+    """
+    avg_speed = 0.0
+    vehs = get_all_vehicles()
+    if len(vehs) == 0:
+        return 1.0
+    for v in vehs:
+        avg_speed += traci.vehicle.getSpeed(v) / traci.vehicle.getAllowedSpeed(v)
+    return avg_speed / len(vehs)
+
+
+def threshold_waiting_time_reward():
+    obs = compute_observation_array()
+
+    waiting_times = obs[9:17]  # biggest waiting times of each lane in the current time step
+    accumulated_waiting_times = sum(waiting_times)
+    halting_number = obs[17:25]  # Halting number on each lane
+    total_vehicles = sum(halting_number)
+    threshold = 90.0
+    if total_vehicles == 0 or accumulated_waiting_times == 0:
+        reward = 1.0  # Maximum reward when no vehicles are present
+    else:
+        if accumulated_waiting_times > threshold:
+            reward = -1.0 * (accumulated_waiting_times - threshold)  # Negative reward for exceeding the threshold
+        else:
+            # Positive reward for staying below or equal to the threshold
+            reward = (threshold - accumulated_waiting_times)
+    return reward
+
+
+max_times = []
+workbook = openpyxl.Workbook()
+column_names = ['curr_green', 'occ1', 'occ2', 'occ3', 'occ4', 'occ5', 'occ6', 'occ7', 'occ8',
+                'sum1', 'sum2', 'sum3', 'sum4', 'sum5', 'sum6', 'sum7', 'sum8',
+                'veh_nr1', 'veh_nr2', 'veh_nr3', 'veh_nr4', 'veh_nr5', 'veh_nr6', 'veh_nr7', 'veh_nr8',
+                'min_green_time', 'rew_pressure', 'rew_speed', 'rew_waiting']
+sheet = workbook.active
+sheet.append(column_names)
 
 # main loop of simulation
 while step < simulation_duration:
     traci.simulationStep()
     step += time_step
-    state = traci.trafficlight.getRedYellowGreenState(traffic_light_id)
-    print(get_one_hot_encoding(state))
+    data = compute_observation_array()
+    max_times.append(max(data[9:17]))
+    data.append(get_lane_pressure())
+    data.append(get_average_speed())
+    data.append(threshold_waiting_time_reward())
+
+    sheet.append(data)
+
+    # state = traci.trafficlight.getRedYellowGreenState(traffic_light_id)
+    # print(get_one_hot_encoding(state))
+
+    #
+    # lanes = list(dict.fromkeys(traci.trafficlight.getControlledLinks(traffic_light_id)))
+    # print("-==========lanes===========")
+    # print(lanes)
+    # edges = {}
+    # controlled_lanes = set()
+    # lanes = traci.trafficlight.getControlledLinks(traffic_light_id)
+    # for lane in lanes:
+    #     edge = lane[0][0]
+    #     print("IN: ", edge)
+    #     print("OUT: ", lane[0][1])
+    #     controlled_lanes.add(edge)
+    #     key = edge[:-2]
+    #     edges[key] = 0
     # print(compute_observation_array())
     # for edge in edges:
 
@@ -211,25 +303,20 @@ while step < simulation_duration:
     #     print("Avg speed on edge ", edge, get_average_speed_on_edge(edge))
     #     print("Avg waiting time on edge ", edge, get_average_waiting_times_on_edge(edge))
 
+workbook.save('observation_data.xlsx')
 # fig, axis = plt.subplots(3)
 #
 # smoothed_values = smooth(density_averages, 0.9)
 # axis[0].set_title("Average traffic density")
 # axis[0].plot(density_averages)
-#
-# smoothed_queue_values = smooth(queue_length_averages, 0.9)
-# axis[1].set_title("Queue length averages")
-# axis[1].plot(smoothed_queue_values)
-#
-# bin_size = 5
-#
-# bins = int(np.ceil((max(intersection_waiting_times) - min(intersection_waiting_times)) / bin_size))
-#
-# axis[2].set_title("Waiting times")
-# axis[2].hist(intersection_waiting_times, bins=bins)
-#
-# fig.tight_layout(pad=0.5)
-# plt.show()
-# print("Total number of cars ", detector_counter)
+avg_max = sum(max_times) / len(max_times)
+print(avg_max)
+plt.plot(max_times)
+plt.xlabel("Max waiting times")
+plt.ylabel("value count")
+
+plt.show()
+
+print("Max waiting time", max(max_times))
 end_time = time.time()
 print("Run for; ", end_time - start_time)
