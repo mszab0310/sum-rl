@@ -25,7 +25,7 @@ def draw_avg(max_times):
 
 
 models_dir = "models/PPO-1687178824"
-model_path = f"{models_dir}/120000.zip"
+model_path = f"{models_dir}/80000.zip"
 
 sumo_cmd = "sumo-gui"  # change this to sumo if gui is not needed
 

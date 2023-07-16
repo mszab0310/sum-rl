@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2023-07-04 15:49:38 by Eclipse SUMO sumo Version 1.16.0
+<!-- generated on 2023-07-12 12:00:32 by Eclipse SUMO GUI Version 1.16.0
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
 
     <input>
-        <net-file value="C:\Users\mszab\Desktop\SUMO_NET/environment/simple_junction/simple.net.xml"/>
-        <route-files value="C:\Users\mszab\Desktop\SUMO_NET/environment/simple_junction/trips.trips.xml"/>
-        <additional-files value="C:\Users\mszab\Desktop\SUMO_NET/environment/simple_junction/simpleJunction.add.xml"/>
+        <net-file value="C:\Users\mszab\Desktop\RL Traffic Control/environment/simple_junction/simple.net.xml"/>
+        <route-files value="C:\Users\mszab\Desktop\RL Traffic Control/environment/simple_junction/trips.trips.xml"/>
+        <additional-files value="C:\Users\mszab\Desktop\RL Traffic Control/environment/simple_junction/simpleJunction.add.xml"/>
     </input>
 
     <time>
@@ -16,7 +16,7 @@
     </time>
 
     <traci_server>
-        <remote-port value="61940"/>
+        <remote-port value="56685"/>
     </traci_server>
 
 </configuration>
